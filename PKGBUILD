@@ -1,0 +1,236 @@
+# Maintainer: Velle Sinclair <brncomputerhelp@gmail.com>
+#
+# syn-edit — the SynapseOS text editor.
+#
+# The suite's answer to Kate, and to vim, without being two programs. There is
+# ONE editing engine and it is modal; the terminal editor and the graphical
+# window are both renderers over it. They collect keys, hand them to the
+# engine, and draw what it says the buffer now looks like. Neither contains a
+# rule about what a key does.
+#
+# That is why `ciw`, `:%s/old/new/g`, undo, registers, marks and macros work in
+# the window: they are not implemented in the window. It is also why the whole
+# thing is testable from a shell script — `syn-edit run --keys 'ggdG' file`
+# drives the same engine with no terminal and no display, which is how all 255
+# tests exercise it.
+#
+# Nothing is linked but libc. Regular expressions are POSIX regcomp, compiled
+# as BASIC expressions so that a pattern typed out of vim habit behaves the way
+# it looks (\( \) group, \| alternates, \+ and \? repeat), with \v switching to
+# extended. Syntax highlighting is a table of twenty-odd languages driving one
+# tokeniser rather than a parser per language. The clipboard is delegated to
+# wl-copy/wl-paste, which is how everything else on this desktop reaches it.
+#
+# ⚠ Files are opened and saved BYTE-FAITHFULLY. CRLF endings, a missing final
+# newline, invalid UTF-8 and embedded NULs all survive a round trip, and the
+# permission bits of the file being replaced are preserved. An editor that
+# silently "fixes" a missing final newline turns opening a file into a diff.
+#
+# ⚠ This package does NOT make itself the default text editor. It declares the
+# MIME types it can handle, which makes it a candidate; which candidate runs is
+# decided by mimeapps.list, and nothing here ships one. Kate keeps whatever it
+# already had until somebody chooses otherwise.
+pkgname=syn-edit
+# pkgver stays 0.1.0 and releases move pkgrel. build-all.sh writes
+# "$name-0.1.0.tar.gz" and transforms paths to "$name-0.1.0/" for every
+# component, so bumping pkgver leaves makepkg looking for a tarball nothing
+# creates.
+pkgver=0.1.0
+# 12: A CLICK TYPED ITS OWN COORDINATES INTO THE DOCUMENT. Reported with a
+#   screenshot of a buffer reading
+#     1G28|1G27|1G27|1G27|viw1G27|1G27|1G27|viw[ ] 1G6|1G11|1G11|1G11|viw
+#   — unexplainable from the outside, because not one of those characters was
+#   pressed by anybody. They are the mouse's own coordinates: gotoPos() placed
+#   the caret by sending the keys a vim user would press, `12G34|`, which is a
+#   MOTION in normal mode and THIRTEEN LITERAL CHARACTERS in insert mode. So
+#   clicking while typing typed. `viw` is the double-click, and the stray digit
+#   before a wheel notch is `3<Up>`'s count.
+#   ⚠ THE RIGHT-CLICK PATH HAD ALREADY BEEN PATCHED FOR THIS, in 11, with an
+#   <Esc> before the move — and the fix stopped there. The left click, the drag,
+#   the double click, the wheel and the scrollbar all still spoke in keys. A bug
+#   fixed at one call site and not at the class is a bug that comes back wearing
+#   a different button.
+#   ⚠ AND ESCAPING FIRST IS NOT THE FIX EITHER. No editor throws you out of
+#   insert mode for clicking somewhere, and none puts you into it: the mode has
+#   to come out exactly as it went in, in normal, insert AND visual. So the
+#   engine gained a `goto <line> <col>` verb that moves the caret and says
+#   nothing about the mode, and the window stopped spelling positions as
+#   keystrokes. It still EXTENDS a visual selection for free, which is what a
+#   drag needs — serve.c sets the caret and the engine reads a selection as
+#   anchor→caret, so moving the caret IS extending it.
+#   The double click still leaves insert deliberately, because `viw` is a
+#   selection and there is no selecting a word while still inserting; the wheel
+#   sends three plain motions instead of a count, since the arrows are safe in
+#   insert mode and the `3` was not.
+#   ⚠ ONE TEST WAS ASSERTING THE SPELLING AND NOT THE RULE: it grepped the QML
+#   for the literal `"G")` to prove the scrollbar moves the caret before it
+#   states the top. That is load-bearing (a `view` with no caret move is a
+#   no-op) but the motion is not, so it now checks the ORDER of gotoPos and
+#   `view` and fails only when the rule is actually broken.
+#   Nine checks in syn_edit_test.sh, including the old key spelling pinned as
+#   the bug — so nobody reintroduces it thinking keys are equivalent.
+# 13: THE WINDOW HAD NEVER PASTED, AND BACKSPACE WOULD NOT JOIN A LINE.
+#   Reported together, and they are one bug. Ctrl+Shift+V did nothing, and
+#   Backspace at the start of line 2 refused to pull it up onto line 1 — the
+#   arrow keys had to be used to get there instead.
+#   ⚠ THE ENGINE WAS RIGHT ABOUT BOTH OF THEM. In NORMAL mode Backspace IS `h`,
+#   a motion that stops dead at column 0 and has never joined a line, and
+#   Ctrl+V IS `<C-v>`, a BLOCK SELECTION — so Ctrl+V had not failed to paste,
+#   it had never once been asked to. Both are the correct answers to a window
+#   that had silently left INSERT, which is what every mouse gesture did: the
+#   double click sent `<Esc>viw`, the right click sent `<Esc>`, and nothing
+#   anywhere sent the window back. One double click and the keyboard was vim's
+#   for the rest of the session, with no indication that anything had changed.
+#   ⛔ SO THE WINDOW IS MODELESS NOW, and the terminal editor is untouched.
+#   `syn-edit` in a terminal is still vim — tui.c hands raw keys to the engine
+#   and none of this is reachable from it. The window stays in INSERT: Ctrl+C,
+#   Ctrl+X and Ctrl+V are the clipboard, Ctrl+Z and Ctrl+Shift+Z (and Ctrl+Y)
+#   undo and redo, Ctrl+A selects all, Ctrl+F and Ctrl+R find and replace,
+#   typing over a selection replaces it, and Escape drops the selection rather
+#   than leaving insert.
+#   ⚠ NOT DONE BY TEACHING THE WINDOW ABOUT MODES. That is the second editor
+#   the whole architecture exists to avoid. serve.c gained six PROTOCOL VERBS —
+#   `gui insert|visual|delsel|copy|cut|paste` — each of which states the mode it
+#   leaves behind, so no caller has to know the one it started in. Same reason
+#   `goto` is a verb (12), and the same rule: a key sequence has to know which
+#   mode will read it, and this window has spent its whole life not knowing.
+#   Paste INSERTS rather than putting: `"+p` lands after the caret, takes a
+#   whole line when the register happens to be linewise, and leaves the caret ON
+#   the last character instead of past it.
+#   ⚠ AND ONE RULE REPLACES A DOZEN CALL SITES: any frame reporting NORMAL is
+#   answered with `gui insert`. Undo, a search finishing, a file opening, a task
+#   being ticked and the engine's own first frame all used to leave the window
+#   in normal mode, each needing its own patch; this is the one that holds for
+#   the ones added later.
+#   ⚠ A SELECTION IS ONE FRAME BEHIND, so the window cannot ask the last frame
+#   whether something is selected the instant after asking for it — Shift+Right
+#   then a letter, typed at any speed, would read "nothing selected" and type
+#   without replacing. Every frame carries the serial of the command that
+#   produced it, so `sent === acked` says whether the answer is current; while
+#   it is not, what the window ASKED FOR is the better answer.
+#   ⛔ AND THAT BOOKKEEPING FOUND A SECOND BUG, older than this one: a Process
+#   write made before the process has spawned is DROPPED, in silence. The
+#   window makes several `view` calls that early, five of which went nowhere —
+#   it worked only because a later onRowsChanged said the same thing again.
+#   Writes are held until the first frame proves the pipe is live.
+#   Paste also reaches the engine's command line, because Find and Replace put
+#   the caret there and pasting a search term is the ordinary reason to have one
+#   open. Control bytes are dropped: a newline would submit it.
+#   ⚠ ONE TEST WAS A FALSE GREEN WAITING TO HAPPEN — it grepped the whole QML
+#   for `"+y`, which the comments explaining the change still contain. The QML
+#   checks strip comments to a file first, because `set -o pipefail` plus
+#   `grep -q` makes `strip | grep` FAIL EXACTLY WHEN IT MATCHES.
+#   Forty-one checks in syn_edit_test.sh, the old spellings pinned as the
+#   bug. 352 pass.
+# 14: THE WINDOW GOT THE LAYOUT IT WAS ASKED FOR — a document list down the
+#   left, full height, with a header of its own, and the toolbar, tabs, text
+#   and status bar as ONE COLUMN beside it. The list used to be a strip wedged
+#   between a toolbar that did not act on it and a status bar about a
+#   different pane.
+#   A row is a CARD, not a line of text: the NAME is what you look for and the
+#   FOLDER is what tells `config.json` in one project from `config.json` in
+#   another, and neither fits on one line at this width. The current one
+#   carries an accent BAR rather than only a tint — ⚠ wash() is the accent at
+#   16% over the panel, which on a pale theme is a few percent of luminance:
+#   legible on the dark preset and invisible on Prism. A solid bar is the same
+#   shape on both.
+#   ⛔ AND THE WINDOW COULD NOT CLOSE A DOCUMENT AT ALL. It opened buffers and
+#   switched between them and never let one go — the list only ever grew, and
+#   `:bd` was the only way out of a window that exists so nobody has to know
+#   `:bd`. Every row has an ✕ now.
+#   ⚠ `:bd` REFUSES ON A MODIFIED BUFFER — "unsaved changes (:bd! to discard)"
+#   — which is right in a terminal and a dead end in a window, the same shape
+#   as the Save button that could refuse but not ask (see 0.1.0-9). So the
+#   window asks: save and close, discard, or cancel.
+#   ⚠ AND THE CLOSE CANNOT SIMPLY BE SENT AFTER THE SAVE. A write can fail, and
+#   `bd` behind a failed save refuses with ITS message — overwriting
+#   "Permission denied" with "unsaved changes", which is the wrong thing about
+#   the wrong problem. The save's own frame is the verdict, found by the serial
+#   it carries (13's bookkeeping, earning its keep).
+#   ⛔ CLOSING THE LAST DOCUMENT IS REFUSED IN doClose(), not only by hiding the
+#   button: `:bd` on a single buffer sets quit, so the difference between the
+#   two is a stray click and a whole session.
+#   ⚠ A POSITIONER REFUSES TO LAY OUT AN ANCHORED CHILD, and the child then
+#   contributes NOTHING to the positioner's implicit height. The question
+#   rendered its sentence and NO BUTTONS, in a bar sized to fit them — not a
+#   clipped button, an invisible one. ToolButton gained `centered: false` for
+#   use inside a Flow or a Column; every existing caller is a Row, which
+#   happens to survive it.
+#   The tab strip got a toolbar switch too — it says the same thing the
+#   sidebar now says, and its only control had been a typed `:set tabbar!` in a
+#   window that exists so nobody has to type that.
+#   The panel's edge drags, and `treewidth` is a new option so a panel sized
+#   once stays sized. ⚠ THE WINDOW'S `set` IS WRITTEN DOWN NOW AND A TYPED
+#   `:set` IS NOT: a panel closed with a button and a sidebar dragged to a
+#   width are preferences, and a window that forgets them on every launch has
+#   to be rearranged every morning. A typed :set is vim's, and vim's answer is
+#   "this session".
+#   The B record gained a sixth field, "has a path" — the sidebar needs it to
+#   know whether Close can offer to save, and matching the "[No Name]" label
+#   would be matching a message.
+#   Twenty-four checks in syn_edit_test.sh, including the layout's anchors:
+#   a wrong one does not error, it just draws a window arranged badly, which
+#   nothing notices and nobody reports. 376 pass.
+pkgrel=15
+pkgdesc="SynapseOS text editor: modal in a terminal, modeless in a window, syntax highlighting"
+arch=('x86_64')
+url="https://github.com/velle999/SYNAPSE"
+license=('GPL-2.0-or-later')
+
+# Nothing but libc. The regex engine is POSIX regcomp, which is part of it.
+depends=('glibc')
+
+makedepends=('meson' 'ninja' 'gcc')
+
+optdepends=('quickshell: the graphical window (syn-edit gui)'
+            'wl-clipboard: yank to and put from the desktop clipboard ("+y and "+p)'
+            # The Open button browses with `synfiles --rec list` rather than
+            # reading directories itself. Without it, Open falls back to the
+            # `:e ` command line it always used.
+            'synfiles: the graphical Open dialogue browses folders with it')
+
+# ── Where the source comes from, here and everywhere else ──────────────────
+#
+# ⛔ ONE source LINE SERVES BOTH, AND THAT IS DELIBERATE. build-all.sh runs
+# tools/collect-source.sh, which drops $pkgname-$pkgver.tar.gz beside this file;
+# makepkg finds it (`-> Found ...`) and never touches the URL. Anybody WITHOUT
+# this checkout has no such file, so makepkg fetches the identical tarball from
+# the release that carries this exact pkgver-pkgrel. A second PKGBUILD for
+# outside use would be a second set of depends and install rules, free to drift
+# from this one — and the person it broke for could not see this file at all.
+#
+# ⚠ THE TAG CARRIES THE pkgrel, so the URL cannot point at the wrong source.
+# preflight.sh already refuses a source edit that does not bump pkgrel, which
+# means every change to what gets built moves this URL with it.
+#
+# ⛔ AND sha256sums STAYS 'SKIP'. A real checksum would break every LOCAL build
+# the moment somebody edited a source file, because the tarball beside this file
+# is regenerated from the working tree and would no longer match. The published
+# asset is reproducible instead — collect-source.sh sorts and zeroes the
+# timestamps, so `tools/collect-source.sh <name>` at the tagged commit
+# re-derives it byte for byte. packaging/README.md has the whole of it.
+source=("$pkgname-$pkgver.tar.gz::https://github.com/velle999/SYNAPSE/releases/download/$pkgname-$pkgver-$pkgrel/$pkgname-$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+    cd "$srcdir/syn-edit-0.1.0"
+    meson setup build --prefix=/usr --buildtype=release
+    meson compile -C build
+}
+
+check() {
+    cd "$srcdir/syn-edit-0.1.0"
+    # ⚠ The suite drives the binary through `syn-edit run`, which applies keys
+    # to a file and PRINTS the result rather than saving it. Everything happens
+    # inside a mktemp -d that the EXIT trap removes, and the single test that
+    # writes to a file at all is the one that tests -w. It also points
+    # SYN_EDIT_CONFIG at that directory, so the settings of whoever is running
+    # the build cannot change what `>>` or `cc` produce and make the suite pass
+    # or fail depending on whose machine it is.
+    meson test -C build --print-errorlogs
+}
+
+package() {
+    cd "$srcdir/syn-edit-0.1.0"
+    meson install -C build --destdir="$pkgdir"
+}
