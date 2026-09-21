@@ -41,6 +41,7 @@ which of these are present on the machine it is run on.
 ## Install
 
 ```bash
+curl -sL https://soslinux.org/synapseos-update-key.asc | gpg --import   # once
 git clone https://github.com/velle999/syn-edit
 cd syn-edit && makepkg -si
 ```
@@ -48,6 +49,10 @@ cd syn-edit && makepkg -si
 makepkg fetches the source for this PKGBUILD's exact version from this
 repository's releases, so a clone can only ever build the source it was
 written against. `.SRCINFO` lists what it needs.
+
+The source is signed with the SynapseOS update key, and makepkg refuses it
+unless the signature is good. The fingerprint is in
+[SECURITY.md](https://github.com/velle999/SYNAPSE/blob/main/SECURITY.md).
 
 ## Where this comes from
 
